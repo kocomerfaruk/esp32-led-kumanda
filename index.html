@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b1d22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LED">
+<title>ESP32 LED Kumanda</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Tek ekranlik kumanda: ust durum satiri, ortada buyuk guc dugmesi, altta parlaklik ve teknik ayrintilar */
+  :root {
+    --bg: #eef0f3;
+    --surface: #ffffff;
+    --fg: #1d2129;
+    --muted: #677080;
+    --line: #d8dce3;
+    --led: #f2a20c;
+    --led-soft: #f2a20c33;
+    --ok: #1f8a4c;
+    --warn: #b7791f;
+    --bad: #c2412d;
+    --font-body: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+    --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171b;
+      --surface: #1f2228;
+      --fg: #e8eaee;
+      --muted: #8d95a3;
+      --line: #2e323a;
+      --led: #ffb22e;
+      --led-soft: #ffb22e2e;
+      --ok: #45c47c;
+      --warn: #e0a24a;
+      --bad: #ef6a55;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 15px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app {
+    max-width: 420px;
+    margin: 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding-block: max(20px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  h1 small { display: block; font-family: var(--font-data); font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted); white-space: nowrap;
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill[data-state="online"] { color: var(--ok); }
+  .pill[data-state="connecting"] { color: var(--warn); }
+  .pill[data-state="offline"] { color: var(--bad); }
+
+  .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; min-height: 260px; }
+  #power {
+    --glow: 0;
+    width: min(220px, 62vw); aspect-ratio: 1; max-width: 100%;
+    border-radius: 50%; border: 1px solid var(--line);
+    background: var(--surface); color: var(--muted);
+    font: 600 22px var(--font-body); letter-spacing: .06em;
+    cursor: pointer; display: grid; place-items: center; gap: 4px;
+    transition: background .25s, color .25s, box-shadow .25s, transform .1s;
+  }
+  #power svg { width: 40px; height: 40px; }
+  #power.on {
+    background: var(--led); color: #2a1c00; border-color: transparent;
+    box-shadow: 0 0 calc(20px + 70px * var(--glow)) calc(4px + 18px * var(--glow)) var(--led-soft);
+  }
+  #power:active:not(:disabled) { transform: scale(.97); }
+  #power:disabled { opacity: .45; cursor: default; }
+  #power:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--led); outline-offset: 3px; }
+  .hint { min-height: 20px; font-size: 13px; color: var(--muted); text-align: center; }
+  .hint.error { color: var(--bad); }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .label { font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .value { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 14px; }
+
+  input[type=range] { width: 100%; accent-color: var(--led); height: 28px; margin: 0; }
+  input[type=range]:disabled { opacity: .45; }
+
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 13px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+
+  details summary { cursor: pointer; font-size: 14px; font-weight: 500; list-style: none; display: flex; justify-content: space-between; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after { content: "+"; color: var(--muted); }
+  details[open] summary::after { content: "−"; }
+  form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+  input[type=text], input[type=password] {
+    font: 15px var(--font-body); color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; width: 100%;
+  }
+  label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn {
+    flex: 1; font: 500 14px var(--font-body); padding: 11px 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .note { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.5; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>ESP32 LED<small>mrfrkkc/esp32-01</small></h1>
+    <span class="pill" id="devicePill" data-state="connecting">Bağlanıyor</span>
+  </header>
+
+  <section class="stage">
+    <button id="power" type="button" disabled aria-pressed="false">
+      <span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/>
+        </svg>
+        <div id="powerText">—</div>
+      </span>
+    </button>
+    <div class="hint" id="hint" role="status"></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span class="label">Parlaklık</span>
+      <span class="value" id="brightnessValue">—</span>
+    </div>
+    <input id="brightness" type="range" min="0" max="100" step="1" value="100" disabled aria-label="Parlaklık">
+    <dl>
+      <dt>PWM duty</dt><dd id="duty">—</dd>
+      <dt>Son yanıt süresi</dt><dd id="latency">—</dd>
+      <dt>Son durum</dt><dd id="lastSeen">—</dd>
+    </dl>
+  </section>
+
+  <section class="panel">
+    <details id="settings">
+      <summary>Bağlantı ayarları</summary>
+      <form id="loginForm" autocomplete="on">
+        <label class="field" for="user">Kullanıcı adı
+          <input id="user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+        </label>
+        <label class="field" for="pass">Şifre
+          <input id="pass" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="check" for="remember"><input id="remember" type="checkbox" checked> Bu cihazda hatırla</label>
+        <div class="actions">
+          <button class="btn primary" type="submit">Bağlan</button>
+          <button class="btn" type="button" id="logout">Bağlantıyı kes ve unut</button>
+        </div>
+        <p class="note">Bilgiler sadece bu tarayıcıda saklanır. Broker: <span class="value" id="hostLabel"></span></p>
+      </form>
+    </details>
+  </section>
+</div>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+  const BROKER_URL = "wss://pfcaed61.ala.eu-central-1.emqxsl.com:8084/mqtt";
+  const BASE = "mrfrkkc/esp32-01";
+  const TOPIC_SET = BASE + "/led/set";
+  const TOPIC_STATE = BASE + "/led/state";
+  const TOPIC_STATUS = BASE + "/status";
+  const STORAGE_KEY = "esp32-led-credentials";
+  const REPLY_TIMEOUT_MS = 3000;
+
+  const $ = (id) => document.getElementById(id);
+  const power = $("power"), slider = $("brightness"), hint = $("hint"), pill = $("devicePill");
+  $("hostLabel").textContent = new URL(BROKER_URL).hostname;
+
+  let client = null;
+  let brokerConnected = false;
+  let deviceOnline = false;
+  let led = null;              // ESP32'nin bildirdigi son durum
+  let pendingSince = 0;        // Cevap beklenen komutun gonderilme zamani
+  let replyTimer = null;
+  let sliderDragging = false;
+  let sliderThrottle = null;
+
+  function loadCredentials() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch (e) { return null; }
+  }
+  function saveCredentials(creds) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(creds)); } catch (e) {}
+  }
+  function clearCredentials() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+
+  function setHint(text, isError) {
+    hint.textContent = text || "";
+    hint.classList.toggle("error", !!isError);
+  }
+
+  function render() {
+    const ready = brokerConnected && deviceOnline && led;
+    power.disabled = !ready;
+    slider.disabled = !ready;
+
+    if (!brokerConnected) {
+      pill.dataset.state = client ? "connecting" : "offline";
+      pill.textContent = client ? "Bağlanıyor" : "Bağlı değil";
+    } else {
+      pill.dataset.state = deviceOnline ? "online" : "offline";
+      pill.textContent = deviceOnline ? "Çevrimiçi" : "Cihaz kapalı";
+    }
+
+    if (!led) {
+      $("powerText").textContent = "—";
+      return;
+    }
+    power.classList.toggle("on", led.on);
+    power.setAttribute("aria-pressed", led.on ? "true" : "false");
+    power.style.setProperty("--glow", led.on ? led.brightness / 100 : 0);
+    $("powerText").textContent = led.on ? "AÇIK" : "KAPALI";
+    if (!sliderDragging) slider.value = led.brightness;
+    $("brightnessValue").textContent = (sliderDragging ? slider.value : led.brightness) + "%";
+    const duty = led.on ? Math.round(led.brightness * 255 / 100) : 0;
+    $("duty").textContent = duty + " / 255";
+  }
+
+  function send(command) {
+    if (!client || !brokerConnected) return;
+    pendingSince = performance.now();
+    clearTimeout(replyTimer);
+    replyTimer = setTimeout(() => {
+      if (pendingSince) setHint("ESP32 yanıt vermedi. Cihazın açık ve internete bağlı olduğunu kontrol et.", true);
+    }, REPLY_TIMEOUT_MS);
+    client.publish(TOPIC_SET, String(command), { qos: 1 });
+  }
+
+  function connect(creds) {
+    if (client) client.end(true);
+    led = null;
+    deviceOnline = false;
+    brokerConnected = false;
+    setHint("Broker'a bağlanılıyor...");
+
+    client = mqtt.connect(BROKER_URL, {
+      username: creds.user,
+      password: creds.pass,
+      clientId: "web-" + Math.random().toString(16).slice(2, 10),
+      protocolVersion: 5,
+      reconnectPeriod: 3000,
+      connectTimeout: 10000,
+      clean: true,
+    });
+
+    client.on("connect", () => {
+      brokerConnected = true;
+      setHint("");
+      client.subscribe([TOPIC_STATE, TOPIC_STATUS], { qos: 1 });
+      render();
+    });
+    client.on("reconnect", () => { brokerConnected = false; render(); });
+    client.on("offline", () => { brokerConnected = false; render(); });
+    client.on("close", () => { brokerConnected = false; render(); });
+    client.on("error", (err) => {
+      const authFailed = /not authorized|bad user name|134|135/i.test(String(err && (err.message || err.code)));
+      if (authFailed) {
+        setHint("Kullanıcı adı veya şifre hatalı. Bağlantı ayarlarından düzelt.", true);
+        $("settings").open = true;
+        client.end(true);
+        client = null;
+      } else {
+        setHint("Bağlantı hatası: " + (err && err.message ? err.message : "bilinmiyor"), true);
+      }
+      render();
+    });
+
+    client.on("message", (topic, payload) => {
+      const text = payload.toString();
+      if (topic === TOPIC_STATUS) {
+        deviceOnline = text === "online";
+        if (!deviceOnline) setHint("ESP32 şu an çevrimdışı.", true);
+        else if (hint.classList.contains("error")) setHint("");
+      } else if (topic === TOPIC_STATE) {
+        try { led = JSON.parse(text); } catch (e) { return; }
+        $("lastSeen").textContent = new Date().toLocaleTimeString("tr-TR");
+        if (pendingSince) {
+          $("latency").textContent = Math.round(performance.now() - pendingSince) + " ms";
+          pendingSince = 0;
+          clearTimeout(replyTimer);
+          setHint("");
+        }
+      }
+      render();
+    });
+
+    render();
+  }
+
+  power.addEventListener("click", () => {
+    if (!led) return;
+    send(led.on ? "OFF" : "ON");
+  });
+
+  slider.addEventListener("input", () => {
+    sliderDragging = true;
+    $("brightnessValue").textContent = slider.value + "%";
+    if (sliderThrottle) return;
+    sliderThrottle = setTimeout(() => { sliderThrottle = null; send(slider.value); }, 150);
+  });
+  slider.addEventListener("change", () => {
+    sliderDragging = false;
+    clearTimeout(sliderThrottle);
+    sliderThrottle = null;
+    send(slider.value);
+  });
+
+  $("loginForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const creds = { user: $("user").value.trim(), pass: $("pass").value };
+    if ($("remember").checked) saveCredentials(creds); else clearCredentials();
+    $("settings").open = false;
+    connect(creds);
+  });
+
+  $("logout").addEventListener("click", () => {
+    clearCredentials();
+    if (client) client.end(true);
+    client = null;
+    brokerConnected = false;
+    deviceOnline = false;
+    led = null;
+    $("user").value = "";
+    $("pass").value = "";
+    setHint("Bağlantı kesildi ve bilgiler silindi.");
+    render();
+  });
+
+  const saved = loadCredentials();
+  if (saved && saved.user) {
+    $("user").value = saved.user;
+    connect(saved);
+  } else {
+    $("settings").open = true;
+    setHint("Başlamak için bağlantı ayarlarına kullanıcı adı ve şifreni gir.");
+    render();
+  }
+</script>
+</body>
+</html>
