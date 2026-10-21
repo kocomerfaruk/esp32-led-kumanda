@@ -163,6 +163,7 @@
       <dt>PWM duty</dt><dd id="duty">—</dd>
       <dt>Son yanıt süresi</dt><dd id="latency">—</dd>
       <dt>Son durum</dt><dd id="lastSeen">—</dd>
+      <dt>Yazılım</dt><dd id="firmware">—</dd>
     </dl>
   </section>
 
@@ -194,6 +195,8 @@
   const TOPIC_SET = BASE + "/led/set";
   const TOPIC_STATE = BASE + "/led/state";
   const TOPIC_STATUS = BASE + "/status";
+  const TOPIC_INFO = BASE + "/info";
+  const TOPIC_OTA_STATE = BASE + "/ota/state";
   const STORAGE_KEY = "esp32-led-credentials";
   const REPLY_TIMEOUT_MS = 3000;
 
@@ -203,7 +206,8 @@
 
   let client = null;
   let brokerConnected = false;
-  let deviceOnline = false;
+  let otaFailed = false;      // Reddedilen guncellemenin mesaji "online" gelince silinmesin
+  let deviceStatus = null;    // "online", "offline" veya "updating" (ESP32 bildirir)
   let led = null;              // ESP32'nin bildirdigi son durum
   let pendingSince = 0;        // Cevap beklenen komutun gonderilme zamani
   let replyTimer = null;
@@ -226,7 +230,7 @@
   }
 
   function render() {
-    const ready = brokerConnected && deviceOnline && led;
+    const ready = brokerConnected && deviceStatus === "online" && led;
     power.disabled = !ready;
     slider.disabled = !ready;
 
@@ -234,8 +238,10 @@
       pill.dataset.state = client ? "connecting" : "offline";
       pill.textContent = client ? "Bağlanıyor" : "Bağlı değil";
     } else {
-      pill.dataset.state = deviceOnline ? "online" : "offline";
-      pill.textContent = deviceOnline ? "Çevrimiçi" : "Cihaz kapalı";
+      const labels = { online: ["online", "Çevrimiçi"], updating: ["connecting", "Güncelleniyor"] };
+      const [state, label] = labels[deviceStatus] || ["offline", "Cihaz kapalı"];
+      pill.dataset.state = state;
+      pill.textContent = label;
     }
 
     if (!led) {
@@ -265,7 +271,7 @@
   function connect(creds) {
     if (client) client.end(true);
     led = null;
-    deviceOnline = false;
+    deviceStatus = null;
     brokerConnected = false;
     setHint("Broker'a bağlanılıyor...");
 
@@ -282,7 +288,7 @@
     client.on("connect", () => {
       brokerConnected = true;
       setHint("");
-      client.subscribe([TOPIC_STATE, TOPIC_STATUS], { qos: 1 });
+      client.subscribe([TOPIC_STATE, TOPIC_STATUS, TOPIC_INFO, TOPIC_OTA_STATE], { qos: 1 });
       render();
     });
     client.on("reconnect", () => { brokerConnected = false; render(); });
@@ -304,9 +310,21 @@
     client.on("message", (topic, payload) => {
       const text = payload.toString();
       if (topic === TOPIC_STATUS) {
-        deviceOnline = text === "online";
-        if (!deviceOnline) setHint("ESP32 şu an çevrimdışı.", true);
-        else if (hint.classList.contains("error")) setHint("");
+        const wasUpdating = deviceStatus === "updating";
+        deviceStatus = text;
+        if (text === "offline") setHint("ESP32 şu an çevrimdışı.", true);
+        else if (text === "updating") setHint("Yazılım güncelleniyor...");
+        else if (wasUpdating && otaFailed) { /* red mesaji ekranda kalsin */ }
+        else if (wasUpdating || hint.classList.contains("error")) setHint("");
+      } else if (topic === TOPIC_INFO) {
+        try { $("firmware").textContent = JSON.parse(text).build || "—"; } catch (e) {}
+      } else if (topic === TOPIC_OTA_STATE) {
+        let ota;
+        try { ota = JSON.parse(text); } catch (e) { return; }
+        otaFailed = ota.state === "error";
+        if (ota.state === "downloading") setHint("Yazılım güncelleniyor: %" + (ota.progress || 0));
+        else if (ota.state === "done") setHint("Güncelleme doğrulandı, cihaz yeniden başlıyor...");
+        else if (ota.state === "error") setHint("Güncelleme başarısız: " + ota.error + ". Cihaz eski yazılımla çalışıyor.", true);
       } else if (topic === TOPIC_STATE) {
         try { led = JSON.parse(text); } catch (e) { return; }
         $("lastSeen").textContent = new Date().toLocaleTimeString("tr-TR");
@@ -354,7 +372,7 @@
     if (client) client.end(true);
     client = null;
     brokerConnected = false;
-    deviceOnline = false;
+    deviceStatus = null;
     led = null;
     $("user").value = "";
     $("pass").value = "";
